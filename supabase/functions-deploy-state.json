@@ -1,0 +1,9 @@
+{
+  "projectId": "72325351",
+  "functions": {
+    "check-username": {
+      "hasChanged": false,
+      "hash": "2c1f830ae21ca7179fa3332283b29d5a806e1d37a95fb949ea43e43a0dac2774"
+    }
+  }
+}
