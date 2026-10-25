@@ -198,7 +198,7 @@ function App() {
         void loadFoundUsernames();
       }
 
-      const delay = result.status === 'rate_limited' ? result.retryAfterMs ?? 5000 : 300;
+      const delay = result.status === 'rate_limited' ? result.retryAfterMs ?? 5000 : 150;
       if (!stopRef.current) await waitBeforeNext(delay);
     }
 
@@ -232,7 +232,7 @@ function App() {
         void loadFoundUsernames();
       }
       if (index < uploadedUsernames.length - 1 && !stopRef.current) {
-        const delay = result.status === 'rate_limited' ? result.retryAfterMs ?? 5000 : 300;
+        const delay = result.status === 'rate_limited' ? result.retryAfterMs ?? 5000 : 150;
         await waitBeforeNext(delay);
       }
     }
