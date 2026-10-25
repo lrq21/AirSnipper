@@ -70,6 +70,7 @@ function App() {
   const [hitNotification, setHitNotification] = useState<string | null>(null);
   const [webhookUrl, setWebhookUrl] = useState(() => window.localStorage.getItem('airsnipper-webhook-url') ?? '');
   const [webhookStatus, setWebhookStatus] = useState<string | null>(null);
+  const [cooldownSeconds, setCooldownSeconds] = useState(0);
 
   const stopRef = useRef(false);
   const resultsRef = useRef<CheckResult[]>([]);
@@ -152,12 +153,23 @@ function App() {
   };
 
   const waitBeforeNext = async (milliseconds: number) => {
-    await new Promise((resolve) => setTimeout(resolve, milliseconds));
+    const seconds = Math.ceil(milliseconds / 1000);
+    if (seconds <= 1) {
+      await new Promise((resolve) => setTimeout(resolve, milliseconds));
+      return;
+    }
+
+    for (let remaining = seconds; remaining > 0 && !stopRef.current; remaining -= 1) {
+      setCooldownSeconds(remaining);
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
+    setCooldownSeconds(0);
   };
 
   const runContinuousCheck = useCallback(async () => {
     if (isChecking || isListChecking) return;
     stopRef.current = false;
+    setCooldownSeconds(0);
     resultsRef.current = [];
     setResults([]);
     setStats({ checked: 0, available: 0, taken: 0, rateLimited: 0, errors: 0 });
@@ -191,6 +203,7 @@ function App() {
     }
 
     setCurrentChecking(null);
+    setCooldownSeconds(0);
     setIsChecking(false);
     void loadFoundUsernames();
   }, [isChecking, isListChecking, pattern, usernameLength]);
@@ -198,6 +211,7 @@ function App() {
   const runUploadedCheck = useCallback(async () => {
     if (uploadedUsernames.length === 0 || isChecking || isListChecking) return;
     stopRef.current = false;
+    setCooldownSeconds(0);
     resultsRef.current = [];
     setResults([]);
     setStats({ checked: 0, available: 0, taken: 0, rateLimited: 0, errors: 0 });
@@ -224,6 +238,7 @@ function App() {
     }
 
     setCurrentChecking(null);
+    setCooldownSeconds(0);
     setIsListChecking(false);
     void loadFoundUsernames();
   }, [isChecking, isListChecking, uploadedUsernames]);
@@ -272,6 +287,7 @@ function App() {
 
   const stopChecking = () => {
     stopRef.current = true;
+    setCooldownSeconds(0);
   };
 
   const handleCopy = async (username: string, id: string) => {
@@ -393,12 +409,12 @@ function App() {
               <input id="username-file" type="file" accept=".txt,text/plain" onChange={(event) => void handleFileUpload(event)} className="hidden" />
               <label htmlFor="username-file" className="flex items-center justify-center gap-2 w-full py-3 rounded-xl border border-dashed border-white/10 hover:border-[#5865F2]/60 hover:bg-white/[0.03] text-sm text-slate-400 cursor-pointer transition-colors"><Upload className="w-4 h-4" />{fileName ?? 'Upload a .txt, one username per line'}</label>
               {uploadedUsernames.length > 0 && <div className="mt-3 flex items-center justify-between gap-3"><div className="flex items-center gap-2 text-xs text-slate-500"><ListChecks className="w-4 h-4 text-emerald-400" /><span><strong className="text-slate-300">{uploadedUsernames.length}</strong> usernames ready to check</span></div><button onClick={() => void runUploadedCheck()} disabled={busy} className="px-4 py-2.5 rounded-xl bg-sky-500 hover:bg-sky-400 disabled:opacity-40 text-black text-xs font-bold transition-colors">Check list</button></div>}
-              {isListChecking && <div className="mt-3"><div className="flex justify-between text-xs text-slate-500 mb-2"><span>{listProgress.done} / {listProgress.total} checked</span><span>{listProgressPercent}%</span></div><div className="h-1.5 bg-white/5 rounded-full overflow-hidden"><div className="h-full bg-sky-400 transition-all" style={{ width: `${listProgressPercent}%` }} /></div><button onClick={stopChecking} className="mt-3 text-xs text-rose-400 hover:text-rose-300">Stop list</button></div>}
+              {isListChecking && <div className="mt-3"><div className="flex justify-between text-xs text-slate-500 mb-2"><span>{listProgress.done} / {listProgress.total} checked{cooldownSeconds > 0 && <span className="ml-2 text-amber-400">— reanuda en {cooldownSeconds}s</span>}</span><span>{listProgressPercent}%</span></div><div className="h-1.5 bg-white/5 rounded-full overflow-hidden"><div className="h-full bg-sky-400 transition-all" style={{ width: `${listProgressPercent}%` }} /></div><button onClick={stopChecking} className="mt-3 text-xs text-rose-400 hover:text-rose-300">Stop list</button></div>}
             </section>
 
             <section className="p-5 rounded-2xl bg-[#0a0a0a] border border-white/5">
               <div className="flex items-center justify-between mb-4"><h2 className="text-sm font-semibold text-slate-300 flex items-center gap-2"><Zap className="w-4 h-4 text-[#57F287]" />Continuous generation ({usernameLength}L)</h2>{results.length > 0 && !busy && <button onClick={clearResults} className="text-xs text-slate-500 hover:text-slate-300 flex items-center gap-1"><X className="w-3 h-3" />Clear</button>}</div>
-              {isChecking && <div className="mb-4"><div className="flex items-center justify-between text-xs text-slate-500 mb-2"><span>{progress.done} checked{currentChecking && <span className="ml-2 text-slate-400">— <span className="text-[#5865F2] font-mono">@{currentChecking}</span></span>}</span><span className="text-emerald-400">running</span></div><div className="h-1.5 bg-white/5 rounded-full overflow-hidden"><div className="h-full w-full bg-gradient-to-r from-[#5865F2] via-[#57F287] to-[#5865F2] animate-pulse" /></div></div>}
+              {isChecking && <div className="mb-4"><div className="flex items-center justify-between text-xs text-slate-500 mb-2"><span>{progress.done} checked{currentChecking && <span className="ml-2 text-slate-400">— <span className="text-[#5865F2] font-mono">@{currentChecking}</span></span>}</span><span className={cooldownSeconds > 0 ? 'text-amber-400' : 'text-emerald-400'}>{cooldownSeconds > 0 ? `rate limit — reanuda en ${cooldownSeconds}s` : 'running'}</span></div><div className="h-1.5 bg-white/5 rounded-full overflow-hidden"><div className="h-full w-full bg-gradient-to-r from-[#5865F2] via-[#57F287] to-[#5865F2] animate-pulse" /></div></div>}
               <button onClick={isChecking ? stopChecking : () => void runContinuousCheck()} disabled={isListChecking} className={`w-full py-3.5 rounded-xl font-semibold text-sm transition-all flex items-center justify-center gap-2 ${isChecking ? 'bg-rose-500/10 text-rose-400 border border-rose-500/20 hover:bg-rose-500/20' : 'bg-[#57F287] hover:bg-[#43b581] disabled:opacity-40 text-black'}`}>{isChecking ? <><Loader2 className="w-4 h-4 animate-spin" />Stop search</> : <><Zap className="w-4 h-4" />Start continuous search</>}</button>
               <ResultList results={results} copiedId={copiedId} onCopy={handleCopy} />
             </section>
