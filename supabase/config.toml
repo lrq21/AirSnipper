@@ -1,2 +1,5 @@
 [functions.check-username]
 verify_jwt = false
+
+[functions.send-hit-webhook]
+verify_jwt = true

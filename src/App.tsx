@@ -3,6 +3,7 @@ import { Bell, Check, Copy, Download, FileText, ListChecks, Loader2, RefreshCw, 
 import { supabase } from '@/lib/supabase';
 import { cleanUsername, cleanUsernameList, generateUsername, type GenerationPattern } from '@/lib/generator';
 import { checkUsername, type CheckResult, type CheckStatus } from '@/lib/checker';
+import { HIT_ROLE_ID, sendWebhookMessage } from '@/lib/webhook';
 
 interface FoundUsername {
   id: string;
@@ -67,6 +68,8 @@ function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [stats, setStats] = useState({ checked: 0, available: 0, taken: 0, rateLimited: 0, errors: 0 });
   const [hitNotification, setHitNotification] = useState<string | null>(null);
+  const [webhookUrl, setWebhookUrl] = useState(() => window.localStorage.getItem('airsnipper-webhook-url') ?? '');
+  const [webhookStatus, setWebhookStatus] = useState<string | null>(null);
 
   const stopRef = useRef(false);
   const resultsRef = useRef<CheckResult[]>([]);
@@ -113,6 +116,24 @@ function App() {
     setHitNotification(username);
     playHitSound();
     window.setTimeout(() => setHitNotification(null), 5000);
+    if (!webhookUrl.trim()) return;
+    void sendWebhookMessage(webhookUrl.trim(), `@everyone hit \`${username}\` <@&${HIT_ROLE_ID}>`)
+      .then(() => setWebhookStatus('Hit enviado correctamente.'))
+      .catch((error: unknown) => setWebhookStatus(error instanceof Error ? error.message : 'No se pudo enviar el hit.'));
+  };
+
+  const testWebhook = async () => {
+    if (!webhookUrl.trim()) {
+      setWebhookStatus('Añade una URL de webhook primero.');
+      return;
+    }
+    setWebhookStatus('Enviando prueba...');
+    try {
+      await sendWebhookMessage(webhookUrl.trim(), 'Bot: Ready 🟢');
+      setWebhookStatus('Prueba enviada correctamente.');
+    } catch (error) {
+      setWebhookStatus(error instanceof Error ? error.message : 'No se pudo enviar la prueba.');
+    }
   };
 
   const downloadAvailableUsernames = () => {
@@ -159,17 +180,14 @@ function App() {
       addResult(result);
       setProgress((previous) => ({ done: previous.done + 1, total: 0 }));
 
-      if (result.status === 'rate_limited') {
-        stopRef.current = true;
-      }
-
       if (result.status === 'available') {
         announceHit(username);
         await saveFoundUsername(username);
         void loadFoundUsernames();
       }
 
-      if (!stopRef.current) await waitBeforeNext(300);
+      const delay = result.status === 'rate_limited' ? result.retryAfterMs ?? 5000 : 300;
+      if (!stopRef.current) await waitBeforeNext(delay);
     }
 
     setCurrentChecking(null);
@@ -191,19 +209,18 @@ function App() {
       const username = uploadedUsernames[index];
       setCurrentChecking(username);
       const result = await checkUsername(username);
-      if (stopRef.current) break;
 
       addResult(result);
       setListProgress({ done: index + 1, total: uploadedUsernames.length });
-      if (result.status === 'rate_limited') {
-        stopRef.current = true;
-      }
       if (result.status === 'available') {
         announceHit(username);
         await saveFoundUsername(username);
         void loadFoundUsernames();
       }
-      if (index < uploadedUsernames.length - 1 && !stopRef.current) await waitBeforeNext(300);
+      if (index < uploadedUsernames.length - 1 && !stopRef.current) {
+        const delay = result.status === 'rate_limited' ? result.retryAfterMs ?? 5000 : 300;
+        await waitBeforeNext(delay);
+      }
     }
 
     setCurrentChecking(null);
@@ -343,6 +360,20 @@ function App() {
                 <input type="checkbox" checked={cleanInput} onChange={handleCleanChange} className="accent-[#5865F2] w-4 h-4" />
                 <span><span className="block text-sm text-slate-300">Clean</span><span className="block text-xs text-slate-600">Removes @, spaces, and invalid characters</span></span>
               </label>
+            </div>
+            <div className="rounded-xl border border-white/5 bg-black p-4 space-y-3">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <h3 className="text-sm font-semibold text-slate-300">Hit webhook</h3>
+                  <p className="text-xs text-slate-600">Envía @everyone hit <span className="font-mono">`username`</span> y menciona el rol configurado.</p>
+                </div>
+                <span className="text-xs text-slate-500 font-mono">Role {HIT_ROLE_ID}</span>
+              </div>
+              <div className="flex flex-col sm:flex-row gap-2">
+                <input type="url" value={webhookUrl} onChange={(event) => { setWebhookUrl(event.target.value); window.localStorage.setItem('airsnipper-webhook-url', event.target.value); }} placeholder="https://discord.com/api/webhooks/..." className="flex-1 px-3 py-2.5 rounded-xl bg-[#0a0a0a] text-slate-200 text-sm border border-white/10 outline-none focus:border-[#5865F2]/60" />
+                <button onClick={() => void testWebhook()} disabled={!webhookUrl.trim()} className="px-4 py-2.5 rounded-xl bg-white/10 hover:bg-white/15 disabled:opacity-40 text-slate-200 text-sm font-semibold transition-colors">Test</button>
+              </div>
+              {webhookStatus && <p className="text-xs text-slate-400">{webhookStatus}</p>}
             </div>
           </section>
         )}
