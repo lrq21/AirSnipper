@@ -74,16 +74,24 @@ export async function checkUsername(username: string): Promise<CheckResult> {
 export async function checkWithRetry(
   username: string,
   maxRetries = 5,
-  delayMs = 5000,
+  fallbackDelayMs = 5000,
 ): Promise<CheckResult> {
   let result = await checkUsername(username);
   let retries = 0;
 
   while (result.status === 'rate_limited' && retries < maxRetries) {
-    await new Promise((r) => setTimeout(r, delayMs));
+    const waitMs = parseRetryAfterMs(result.message) ?? fallbackDelayMs;
+    await new Promise((r) => setTimeout(r, waitMs));
     result = await checkUsername(username);
     retries++;
   }
 
   return result;
+}
+
+function parseRetryAfterMs(message?: string): number | null {
+  if (!message) return null;
+  const match = message.match(/(\d+(?:\.\d+)?)s/i);
+  if (!match) return null;
+  return Math.ceil(parseFloat(match[1]) * 1000);
 }

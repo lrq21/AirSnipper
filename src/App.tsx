@@ -66,7 +66,7 @@ function App() {
   const [foundUsernames, setFoundUsernames] = useState<FoundUsername[]>([]);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
-  const [stats, setStats] = useState({ checked: 0, available: 0, taken: 0 });
+  const [stats, setStats] = useState({ checked: 0, available: 0, taken: 0, rateLimited: 0, errors: 0 });
   const [hitNotification, setHitNotification] = useState<string | null>(null);
 
   const stopRef = useRef(false);
@@ -102,9 +102,11 @@ function App() {
     resultsRef.current = [result, ...resultsRef.current].slice(0, RESULT_LIMIT);
     setResults([...resultsRef.current]);
     setStats((previous) => ({
-      checked: previous.checked + 1,
+      checked: previous.checked + (result.status === 'available' || result.status === 'taken' ? 1 : 0),
       available: previous.available + (result.status === 'available' ? 1 : 0),
       taken: previous.taken + (result.status === 'taken' ? 1 : 0),
+      rateLimited: previous.rateLimited + (result.status === 'rate_limited' ? 1 : 0),
+      errors: previous.errors + (result.status === 'error' || result.status === 'invalid' ? 1 : 0),
     }));
   };
 
@@ -138,7 +140,7 @@ function App() {
     stopRef.current = false;
     resultsRef.current = [];
     setResults([]);
-    setStats({ checked: 0, available: 0, taken: 0 });
+    setStats({ checked: 0, available: 0, taken: 0, rateLimited: 0, errors: 0 });
     setProgress({ done: 0, total: 0 });
     setIsChecking(true);
 
@@ -177,7 +179,7 @@ function App() {
     stopRef.current = false;
     resultsRef.current = [];
     setResults([]);
-    setStats({ checked: 0, available: 0, taken: 0 });
+    setStats({ checked: 0, available: 0, taken: 0, rateLimited: 0, errors: 0 });
     setIsListChecking(true);
     setListProgress({ done: 0, total: uploadedUsernames.length });
 
@@ -268,7 +270,7 @@ function App() {
   const clearResults = () => {
     resultsRef.current = [];
     setResults([]);
-    setStats({ checked: 0, available: 0, taken: 0 });
+    setStats({ checked: 0, available: 0, taken: 0, rateLimited: 0, errors: 0 });
   };
 
   const busy = isChecking || isListChecking;
@@ -299,10 +301,12 @@ function App() {
           </div>
         )}
 
-        <div className="grid grid-cols-3 gap-3 mb-6">
+        <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 mb-6">
           <StatCard label="Checked" value={stats.checked} icon={<Search className="w-4 h-4" />} color="text-sky-400" />
           <StatCard label="Available" value={stats.available} icon={<Check className="w-4 h-4" />} color="text-emerald-400" />
           <StatCard label="Taken" value={stats.taken} icon={<X className="w-4 h-4" />} color="text-rose-400" />
+          <StatCard label="Rate limited" value={stats.rateLimited} icon={<Loader2 className="w-4 h-4" />} color="text-amber-400" />
+          <StatCard label="Errors" value={stats.errors} icon={<X className="w-4 h-4" />} color="text-slate-400" />
         </div>
 
         {showSettings && (
