@@ -12,6 +12,7 @@ export interface CheckResult {
   username: string;
   status: CheckStatus;
   message?: string;
+  retryAfterMs?: number;
 }
 
 export async function checkUsername(username: string): Promise<CheckResult> {
@@ -30,15 +31,15 @@ export async function checkUsername(username: string): Promise<CheckResult> {
 
     if (res.status === 429) {
       const body = await res.json().catch(() => ({}));
-      const retryAfter = body?.retry_after;
-      const waitMs = retryAfter ? Math.ceil(retryAfter * 1000) : 5000;
-      return { username, status: 'rate_limited', message: `Rate limited — waiting ${Math.ceil(waitMs / 1000)}s...` };
+      const retryAfter = getRetryAfterMs(res.headers.get('Retry-After'), body?.retry_after);
+      return { username, status: 'rate_limited', retryAfterMs: retryAfter, message: formatRateLimitMessage(retryAfter) };
     }
 
     if (!res.ok) {
       const errBody = await res.json().catch(() => ({}));
       if (errBody?.error === 'rate_limited') {
-        return { username, status: 'rate_limited', message: 'Rate limited — waiting...' };
+        const retryAfter = getRetryAfterMs(res.headers.get('Retry-After'), errBody?.retry_after);
+        return { username, status: 'rate_limited', retryAfterMs: retryAfter, message: formatRateLimitMessage(retryAfter) };
       }
       return { username, status: 'error', message: errBody?.message || `HTTP ${res.status}` };
     }
@@ -50,9 +51,8 @@ export async function checkUsername(username: string): Promise<CheckResult> {
     }
 
     if (data?.error === 'rate_limited') {
-      const retryAfter = data?.retry_after;
-      const waitMs = retryAfter ? Math.ceil(retryAfter * 1000) : 5000;
-      return { username, status: 'rate_limited', message: `Rate limited — waiting ${Math.ceil(waitMs / 1000)}s...` };
+      const retryAfter = getRetryAfterMs(res.headers.get('Retry-After'), data?.retry_after);
+      return { username, status: 'rate_limited', retryAfterMs: retryAfter, message: formatRateLimitMessage(retryAfter) };
     }
 
     if (typeof data?.taken === 'boolean') {
@@ -71,27 +71,12 @@ export async function checkUsername(username: string): Promise<CheckResult> {
   }
 }
 
-export async function checkWithRetry(
-  username: string,
-  maxRetries = 5,
-  fallbackDelayMs = 5000,
-): Promise<CheckResult> {
-  let result = await checkUsername(username);
-  let retries = 0;
-
-  while (result.status === 'rate_limited' && retries < maxRetries) {
-    const waitMs = parseRetryAfterMs(result.message) ?? fallbackDelayMs;
-    await new Promise((r) => setTimeout(r, waitMs));
-    result = await checkUsername(username);
-    retries++;
-  }
-
-  return result;
+function getRetryAfterMs(headerValue: string | null, bodyValue: unknown): number | undefined {
+  const seconds = Number(headerValue ?? bodyValue);
+  return Number.isFinite(seconds) && seconds > 0 ? Math.ceil(seconds * 1000) : undefined;
 }
 
-function parseRetryAfterMs(message?: string): number | null {
-  if (!message) return null;
-  const match = message.match(/(\d+(?:\.\d+)?)s/i);
-  if (!match) return null;
-  return Math.ceil(parseFloat(match[1]) * 1000);
+function formatRateLimitMessage(retryAfterMs?: number): string {
+  if (!retryAfterMs) return 'Discord ha limitado las comprobaciones. La búsqueda se detuvo.';
+  return `Discord ha limitado las comprobaciones. Inténtalo de nuevo en ${Math.ceil(retryAfterMs / 1000)}s.`;
 }

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState, type ChangeEvent, type ReactN
 import { Bell, Check, Copy, Download, FileText, ListChecks, Loader2, RefreshCw, Search, Settings, Trash2, Trophy, Upload, X, Zap } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { cleanUsername, cleanUsernameList, generateUsername, type GenerationPattern } from '@/lib/generator';
-import { checkWithRetry, type CheckResult, type CheckStatus } from '@/lib/checker';
+import { checkUsername, type CheckResult, type CheckStatus } from '@/lib/checker';
 
 interface FoundUsername {
   id: string;
@@ -20,7 +20,6 @@ const STATUS_CONFIG: Record<CheckStatus, { label: string; color: string; dot: st
   error: { label: 'Error', color: 'text-slate-500', dot: 'bg-slate-500' },
 };
 
-const RATE_LIMIT_DELAY = 5000;
 const RESULT_LIMIT = 100;
 
 function playHitSound() {
@@ -154,11 +153,15 @@ function App() {
       if (checkedNamesRef.current.has(username)) break;
       setCurrentChecking(username);
 
-      const result = await checkWithRetry(username, 5, RATE_LIMIT_DELAY);
+      const result = await checkUsername(username);
       if (stopRef.current) break;
 
       addResult(result);
       setProgress((previous) => ({ done: previous.done + 1, total: 0 }));
+
+      if (result.status === 'rate_limited') {
+        stopRef.current = true;
+      }
 
       if (result.status === 'available') {
         announceHit(username);
@@ -187,11 +190,14 @@ function App() {
       if (stopRef.current) break;
       const username = uploadedUsernames[index];
       setCurrentChecking(username);
-      const result = await checkWithRetry(username, 5, RATE_LIMIT_DELAY);
+      const result = await checkUsername(username);
       if (stopRef.current) break;
 
       addResult(result);
       setListProgress({ done: index + 1, total: uploadedUsernames.length });
+      if (result.status === 'rate_limited') {
+        stopRef.current = true;
+      }
       if (result.status === 'available') {
         announceHit(username);
         await saveFoundUsername(username);
@@ -210,7 +216,7 @@ function App() {
     if (!username || isManualChecking || isChecking || isListChecking) return;
     setIsManualChecking(true);
     setCurrentChecking(username);
-    const result = await checkWithRetry(username, 5, RATE_LIMIT_DELAY);
+    const result = await checkUsername(username);
     addResult(result);
     if (result.status === 'available') {
       announceHit(username);
@@ -369,7 +375,7 @@ function App() {
 
           <div className="lg:col-span-2"><section className="p-5 rounded-2xl bg-[#0a0a0a] border border-white/5 sticky top-6"><div className="flex items-center justify-between mb-4"><h2 className="text-sm font-semibold text-slate-300 flex items-center gap-2"><Trophy className="w-4 h-4 text-amber-400" />Available usernames{foundUsernames.length > 0 && <span className="ml-1 px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 text-xs font-bold">{foundUsernames.length}</span>}</h2>{foundUsernames.length > 0 && <div className="flex items-center gap-1"><button onClick={downloadAvailableUsernames} className="text-xs text-slate-500 hover:text-emerald-400 flex items-center gap-1" title="Download available usernames"><Download className="w-3 h-3" />TXT</button><button onClick={() => void clearFound()} className="text-xs text-slate-500 hover:text-rose-400 flex items-center gap-1"><Trash2 className="w-3 h-3" />Clear</button></div>}</div>{foundUsernames.length === 0 ? <div className="text-center py-12"><div className="w-14 h-14 mx-auto mb-3 rounded-2xl bg-white/5 flex items-center justify-center"><Trophy className="w-6 h-6 text-slate-600" /></div><p className="text-sm text-slate-500">No available usernames yet</p><p className="text-xs text-slate-600 mt-1">Start a search to find them</p></div> : <div className="space-y-1.5 max-h-[500px] overflow-y-auto pr-1 custom-scroll">{foundUsernames.map((username) => <div key={username.id} className="flex items-center justify-between px-3.5 py-2.5 rounded-lg bg-emerald-500/5 border border-emerald-500/10 group"><div className="flex items-center gap-3"><span className="w-2 h-2 rounded-full bg-emerald-400" /><span className="font-mono text-sm text-emerald-300">@{username.username}</span><span className="text-xs text-slate-600">{username.length}L</span></div><div className="flex items-center gap-1"><button onClick={() => void handleCopy(username.username, username.id)} className="p-1 text-slate-500 hover:text-slate-200">{copiedId === username.id ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}</button><button onClick={() => void handleDeleteFound(username.id)} className="p-1 text-slate-500 hover:text-rose-400"><Trash2 className="w-3.5 h-3.5" /></button></div></div>)}</div>}{foundUsernames.length > 0 && <button onClick={() => void loadFoundUsernames()} className="w-full mt-3 py-2 rounded-xl bg-white/5 hover:bg-white/10 text-slate-400 text-xs font-medium flex items-center justify-center gap-2"><RefreshCw className="w-3.5 h-3.5" />Refresh</button>}</section></div>
         </div>
-        <footer className="mt-12 text-center"><p className="text-xs text-slate-600">The checker uses a safe delay to avoid Discord rate limits. Available usernames are saved automatically.</p></footer>
+        <footer className="mt-12 text-center"><p className="text-xs text-slate-600">Las comprobaciones se hacen una por una y se detienen al detectar un límite de Discord. Los nombres disponibles se guardan automáticamente.</p></footer>
       </div>
     </div>
   );
