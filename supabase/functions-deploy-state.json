@@ -3,7 +3,7 @@
   "functions": {
     "check-username": {
       "hasChanged": false,
-      "hash": "2c1f830ae21ca7179fa3332283b29d5a806e1d37a95fb949ea43e43a0dac2774"
+      "hash": "88cd07db90cb0c2e260b1b17cfca2d341619b68364a8e1eae6715a6cf8417d30"
     },
     "send-hit-webhook": {
       "hasChanged": false,
