@@ -3,11 +3,15 @@
   "functions": {
     "check-username": {
       "hasChanged": false,
-      "hash": "88cd07db90cb0c2e260b1b17cfca2d341619b68364a8e1eae6715a6cf8417d30"
+      "hash": "3d07e53b71453ae17ec64d6665d145e1d9ff845e68d828d4bda3dc90947cb5f1"
     },
     "send-hit-webhook": {
       "hasChanged": false,
       "hash": "f518f1ce99326d2003ad21215a0b09af3a0d39881e4198cd5d011d4d286eeb59"
+    },
+    "search-worker": {
+      "hasChanged": false,
+      "hash": "302d4aab8a3749156ce950a0fb6aa6d94cf2c06430db5dd6316726d05ba70001"
     }
   }
 }

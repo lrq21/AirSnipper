@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef, useState, type ChangeEvent, type ReactNode } from 'react';
 import { Bell, Check, Copy, Download, FileText, ListChecks, Loader2, RefreshCw, Search, Settings, Trash2, Trophy, Upload, X, Zap } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
-import { cleanUsername, cleanUsernameList, generateUsername, type GenerationPattern } from '@/lib/generator';
+import { cleanUsername, cleanUsernameList, type GenerationPattern } from '@/lib/generator';
 import { checkUsername, type CheckResult, type CheckStatus } from '@/lib/checker';
 import { HIT_ROLE_ID, sendWebhookMessage } from '@/lib/webhook';
+import { fetchRecentChecks, fetchSearchJob, startSearchJob, stopSearchJob, type SearchJob } from '@/lib/searchJob';
 
 interface FoundUsername {
   id: string;
@@ -55,13 +56,16 @@ function App() {
   const [uploadedRawLines, setUploadedRawLines] = useState<string[]>([]);
   const [fileName, setFileName] = useState<string | null>(null);
 
-  const [isChecking, setIsChecking] = useState(false);
   const [isListChecking, setIsListChecking] = useState(false);
   const [isManualChecking, setIsManualChecking] = useState(false);
   const [results, setResults] = useState<CheckResult[]>([]);
   const [currentChecking, setCurrentChecking] = useState<string | null>(null);
-  const [progress, setProgress] = useState({ done: 0, total: 0 });
   const [listProgress, setListProgress] = useState({ done: 0, total: 0 });
+  const [searchJob, setSearchJob] = useState<SearchJob | null>(null);
+  const [recentChecks, setRecentChecks] = useState<CheckResult[]>([]);
+  const [searchError, setSearchError] = useState<string | null>(null);
+  const [clock, setClock] = useState(() => Date.now());
+  const isChecking = searchJob?.is_running ?? false;
 
   const [foundUsernames, setFoundUsernames] = useState<FoundUsername[]>([]);
   const [copiedId, setCopiedId] = useState<string | null>(null);
@@ -74,24 +78,68 @@ function App() {
 
   const stopRef = useRef(false);
   const resultsRef = useRef<CheckResult[]>([]);
-  const checkedNamesRef = useRef(new Set<string>());
+  const knownFoundRef = useRef<Set<string> | null>(null);
 
-  useEffect(() => {
-    loadFoundUsernames();
+  const announceHit = useCallback((username: string) => {
+    knownFoundRef.current?.add(username);
+    setHitNotification(username);
+    playHitSound();
+    window.setTimeout(() => setHitNotification(null), 5000);
+    const webhookUrl = window.localStorage.getItem('airsnipper-webhook-url')?.trim() ?? '';
+    if (!webhookUrl) return;
+    void sendWebhookMessage(webhookUrl, `@everyone hit \`${username}\` <@&${HIT_ROLE_ID}>`)
+      .then(() => setWebhookStatus('Hit enviado correctamente.'))
+      .catch((error: unknown) => setWebhookStatus(error instanceof Error ? error.message : 'No se pudo enviar el hit.'));
   }, []);
 
-  const loadFoundUsernames = async () => {
+  const loadFoundUsernames = useCallback(async () => {
     const { data, error } = await supabase
       .from('found_usernames')
       .select('*')
       .order('checked_at', { ascending: false });
+    if (error || !data) return;
 
-    if (!error && data) {
-      const usernames = data as FoundUsername[];
-      usernames.forEach((username) => checkedNamesRef.current.add(username.username));
-      setFoundUsernames(usernames);
+    const usernames = data as FoundUsername[];
+    const previouslyKnown = knownFoundRef.current;
+    knownFoundRef.current = new Set(usernames.map((username) => username.username));
+    if (previouslyKnown) {
+      usernames
+        .filter((username) => !previouslyKnown.has(username.username))
+        .forEach((username) => announceHit(username.username));
     }
-  };
+    setFoundUsernames(usernames);
+  }, [announceHit]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const refresh = async () => {
+      try {
+        const job = await fetchSearchJob();
+        if (cancelled) return;
+        setSearchJob(job);
+        setSearchError(null);
+        if (job.is_running) {
+          const checks = await fetchRecentChecks();
+          if (!cancelled) setRecentChecks(checks);
+        }
+        await loadFoundUsernames();
+      } catch (error) {
+        if (!cancelled) setSearchError(error instanceof Error ? error.message : 'No se pudo actualizar la búsqueda.');
+      }
+    };
+    void refresh();
+    const interval = window.setInterval(() => void refresh(), 3000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [loadFoundUsernames]);
+
+  useEffect(() => {
+    if (!isChecking) return;
+    const interval = window.setInterval(() => setClock(Date.now()), 1000);
+    return () => window.clearInterval(interval);
+  }, [isChecking]);
 
   const saveFoundUsername = async (username: string) => {
     await supabase.from('found_usernames').upsert(
@@ -101,7 +149,6 @@ function App() {
   };
 
   const addResult = (result: CheckResult) => {
-    checkedNamesRef.current.add(result.username);
     resultsRef.current = [result, ...resultsRef.current].slice(0, RESULT_LIMIT);
     setResults([...resultsRef.current]);
     setStats((previous) => ({
@@ -111,16 +158,6 @@ function App() {
       rateLimited: previous.rateLimited + (result.status === 'rate_limited' ? 1 : 0),
       errors: previous.errors + (result.status === 'error' || result.status === 'invalid' ? 1 : 0),
     }));
-  };
-
-  const announceHit = (username: string) => {
-    setHitNotification(username);
-    playHitSound();
-    window.setTimeout(() => setHitNotification(null), 5000);
-    if (!webhookUrl.trim()) return;
-    void sendWebhookMessage(webhookUrl.trim(), `@everyone hit \`${username}\` <@&${HIT_ROLE_ID}>`)
-      .then(() => setWebhookStatus('Hit enviado correctamente.'))
-      .catch((error: unknown) => setWebhookStatus(error instanceof Error ? error.message : 'No se pudo enviar el hit.'));
   };
 
   const testWebhook = async () => {
@@ -166,47 +203,26 @@ function App() {
     setCooldownSeconds(0);
   };
 
-  const runContinuousCheck = useCallback(async () => {
-    if (isChecking || isListChecking) return;
-    stopRef.current = false;
-    setCooldownSeconds(0);
-    resultsRef.current = [];
-    setResults([]);
-    setStats({ checked: 0, available: 0, taken: 0, rateLimited: 0, errors: 0 });
-    setProgress({ done: 0, total: 0 });
-    setIsChecking(true);
-
-    while (!stopRef.current) {
-      let username = generateUsername(usernameLength, pattern);
-      let attempts = 0;
-      while (checkedNamesRef.current.has(username) && attempts < 1000) {
-        username = generateUsername(usernameLength, pattern);
-        attempts += 1;
-      }
-      if (checkedNamesRef.current.has(username)) break;
-      setCurrentChecking(username);
-
-      const result = await checkUsername(username);
-      if (stopRef.current) break;
-
-      addResult(result);
-      setProgress((previous) => ({ done: previous.done + 1, total: 0 }));
-
-      if (result.status === 'available') {
-        announceHit(username);
-        await saveFoundUsername(username);
-        void loadFoundUsernames();
-      }
-
-      const delay = result.status === 'rate_limited' ? result.retryAfterMs ?? 5000 : 150;
-      if (!stopRef.current) await waitBeforeNext(delay);
+  const startContinuousSearch = async () => {
+    if (isListChecking) return;
+    setSearchError(null);
+    try {
+      await startSearchJob({ usernameLength, pattern });
+      setSearchJob(await fetchSearchJob());
+    } catch (error) {
+      setSearchError(error instanceof Error ? error.message : 'No se pudo iniciar la búsqueda.');
     }
+  };
 
-    setCurrentChecking(null);
-    setCooldownSeconds(0);
-    setIsChecking(false);
-    void loadFoundUsernames();
-  }, [isChecking, isListChecking, pattern, usernameLength]);
+  const stopContinuousSearch = async () => {
+    setSearchError(null);
+    try {
+      await stopSearchJob();
+      setSearchJob(await fetchSearchJob());
+    } catch (error) {
+      setSearchError(error instanceof Error ? error.message : 'No se pudo detener la búsqueda.');
+    }
+  };
 
   const runUploadedCheck = useCallback(async () => {
     if (uploadedUsernames.length === 0 || isChecking || isListChecking) return;
@@ -313,6 +329,7 @@ function App() {
   };
 
   const busy = isChecking || isListChecking;
+  const continuousCooldown = searchJob ? Math.max(0, Math.ceil((Date.parse(searchJob.next_run_at) - clock) / 1000)) : 0;
   const listProgressPercent = listProgress.total > 0 ? Math.round((listProgress.done / listProgress.total) * 100) : 0;
 
   return (
@@ -414,15 +431,15 @@ function App() {
 
             <section className="p-5 rounded-2xl bg-[#0a0a0a] border border-white/5">
               <div className="flex items-center justify-between mb-4"><h2 className="text-sm font-semibold text-slate-300 flex items-center gap-2"><Zap className="w-4 h-4 text-[#57F287]" />Continuous generation ({usernameLength}L)</h2>{results.length > 0 && !busy && <button onClick={clearResults} className="text-xs text-slate-500 hover:text-slate-300 flex items-center gap-1"><X className="w-3 h-3" />Clear</button>}</div>
-              {isChecking && <div className="mb-4"><div className="flex items-center justify-between text-xs text-slate-500 mb-2"><span>{progress.done} checked{currentChecking && <span className="ml-2 text-slate-400">— <span className="text-[#5865F2] font-mono">@{currentChecking}</span></span>}</span><span className={cooldownSeconds > 0 ? 'text-amber-400' : 'text-emerald-400'}>{cooldownSeconds > 0 ? `rate limit — reanuda en ${cooldownSeconds}s` : 'running'}</span></div><div className="h-1.5 bg-white/5 rounded-full overflow-hidden"><div className="h-full w-full bg-gradient-to-r from-[#5865F2] via-[#57F287] to-[#5865F2] animate-pulse" /></div></div>}
-              <button onClick={isChecking ? stopChecking : () => void runContinuousCheck()} disabled={isListChecking} className={`w-full py-3.5 rounded-xl font-semibold text-sm transition-all flex items-center justify-center gap-2 ${isChecking ? 'bg-rose-500/10 text-rose-400 border border-rose-500/20 hover:bg-rose-500/20' : 'bg-[#57F287] hover:bg-[#43b581] disabled:opacity-40 text-black'}`}>{isChecking ? <><Loader2 className="w-4 h-4 animate-spin" />Stop search</> : <><Zap className="w-4 h-4" />Start continuous search</>}</button>
-              <ResultList results={results} copiedId={copiedId} onCopy={handleCopy} />
+              {searchError && <p className="mb-4 text-xs text-rose-400">{searchError}</p>}{isChecking && searchJob && <div className="mb-4"><div className="flex items-center justify-between gap-3 text-xs text-slate-500 mb-2"><span>{searchJob.checked} checked{searchJob.last_message && <span className="ml-2 text-slate-400">— {searchJob.last_message}</span>}</span><span className={continuousCooldown > 0 ? 'text-amber-400' : 'text-emerald-400'}>{continuousCooldown > 0 ? `rate limit — reanuda en ${continuousCooldown}s` : 'running on server'}</span></div><div className="h-1.5 bg-white/5 rounded-full overflow-hidden"><div className="h-full w-full bg-gradient-to-r from-[#5865F2] via-[#57F287] to-[#5865F2] animate-pulse" /></div></div>}
+              <button onClick={isChecking ? () => void stopContinuousSearch() : () => void startContinuousSearch()} disabled={isListChecking} className={`w-full py-3.5 rounded-xl font-semibold text-sm transition-all flex items-center justify-center gap-2 ${isChecking ? 'bg-rose-500/10 text-rose-400 border border-rose-500/20 hover:bg-rose-500/20' : 'bg-[#57F287] hover:bg-[#43b581] disabled:opacity-40 text-black'}`}>{isChecking ? <><Loader2 className="w-4 h-4 animate-spin" />Stop search</> : <><Zap className="w-4 h-4" />Start continuous search</>}</button>
+              <ResultList results={isChecking ? recentChecks : results} copiedId={copiedId} onCopy={handleCopy} />
             </section>
           </div>
 
           <div className="lg:col-span-2"><section className="p-5 rounded-2xl bg-[#0a0a0a] border border-white/5 sticky top-6"><div className="flex items-center justify-between mb-4"><h2 className="text-sm font-semibold text-slate-300 flex items-center gap-2"><Trophy className="w-4 h-4 text-amber-400" />Available usernames{foundUsernames.length > 0 && <span className="ml-1 px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 text-xs font-bold">{foundUsernames.length}</span>}</h2>{foundUsernames.length > 0 && <div className="flex items-center gap-1"><button onClick={downloadAvailableUsernames} className="text-xs text-slate-500 hover:text-emerald-400 flex items-center gap-1" title="Download available usernames"><Download className="w-3 h-3" />TXT</button><button onClick={() => void clearFound()} className="text-xs text-slate-500 hover:text-rose-400 flex items-center gap-1"><Trash2 className="w-3 h-3" />Clear</button></div>}</div>{foundUsernames.length === 0 ? <div className="text-center py-12"><div className="w-14 h-14 mx-auto mb-3 rounded-2xl bg-white/5 flex items-center justify-center"><Trophy className="w-6 h-6 text-slate-600" /></div><p className="text-sm text-slate-500">No available usernames yet</p><p className="text-xs text-slate-600 mt-1">Start a search to find them</p></div> : <div className="space-y-1.5 max-h-[500px] overflow-y-auto pr-1 custom-scroll">{foundUsernames.map((username) => <div key={username.id} className="flex items-center justify-between px-3.5 py-2.5 rounded-lg bg-emerald-500/5 border border-emerald-500/10 group"><div className="flex items-center gap-3"><span className="w-2 h-2 rounded-full bg-emerald-400" /><span className="font-mono text-sm text-emerald-300">@{username.username}</span><span className="text-xs text-slate-600">{username.length}L</span></div><div className="flex items-center gap-1"><button onClick={() => void handleCopy(username.username, username.id)} className="p-1 text-slate-500 hover:text-slate-200">{copiedId === username.id ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}</button><button onClick={() => void handleDeleteFound(username.id)} className="p-1 text-slate-500 hover:text-rose-400"><Trash2 className="w-3.5 h-3.5" /></button></div></div>)}</div>}{foundUsernames.length > 0 && <button onClick={() => void loadFoundUsernames()} className="w-full mt-3 py-2 rounded-xl bg-white/5 hover:bg-white/10 text-slate-400 text-xs font-medium flex items-center justify-center gap-2"><RefreshCw className="w-3.5 h-3.5" />Refresh</button>}</section></div>
         </div>
-        <footer className="mt-12 text-center"><p className="text-xs text-slate-600">Las comprobaciones se hacen una por una y se detienen al detectar un límite de Discord. Los nombres disponibles se guardan automáticamente.</p></footer>
+        <footer className="mt-12 text-center"><p className="text-xs text-slate-600">Las comprobaciones de la lista y del nombre manual se hacen desde tu navegador y se detienen al detectar un límite de Discord. La búsqueda continua corre en el servidor, aunque cierres la página, y pausa sola cuando Discord pide esperar. Los nombres disponibles se guardan automáticamente.</p></footer>
       </div>
     </div>
   );

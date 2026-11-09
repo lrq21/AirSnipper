@@ -3,3 +3,6 @@ verify_jwt = false
 
 [functions.send-hit-webhook]
 verify_jwt = true
+
+[functions.search-worker]
+verify_jwt = false

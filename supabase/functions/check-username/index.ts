@@ -19,11 +19,6 @@ function response(body: Record<string, unknown>, status: number, extra?: Headers
   });
 }
 
-function randomForwardedFor(): string {
-  const octet = () => Math.floor(Math.random() * 254) + 1;
-  return `${octet()}.${octet()}.${octet()}.${octet()}`;
-}
-
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { status: 200, headers: corsHeaders });
@@ -62,7 +57,6 @@ Deno.serve(async (req: Request) => {
         "Content-Type": "application/json",
         "Accept": "application/json",
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "X-Forwarded-For": randomForwardedFor(),
         "Accept-Language": "en-US,en;q=0.9",
         "Origin": "https://discord.com",
         "Referer": "https://discord.com/",
